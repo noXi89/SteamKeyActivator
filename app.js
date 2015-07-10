@@ -1,37 +1,99 @@
-(function(){
-	var config = {
+var exec = require('child_process').execFile;
+var request = require('request');
+var debug = console.log;
+var checkedComments = [];
+var SEMAPHORE = false;
+
+var Grabber = function(globalArgs){
+	globalArgs = globalArgs || 'flags=1';
+	this.keys=[];
+	this.config = {
 		'ahk-exe': 'D:\\Program Files\\AutoHotkey\\AutoHotkey.exe',
-		'ahk-script': (__dirname + '\\key.ahk')
+		'ahk-script': (__dirname + '\\key.ahk'),
+		'repeat': 20000, //in ms
+		'global-args': globalArgs
 	};
+	this.run();
+}
 
-	var exec = require('child_process').execFile;
+Grabber.prototype.execAHK = function(key){
+	var executeFile = this.config['ahk-exe'];
+	var executeArgs = [this.config['ahk-script'], key];
 
-	var keys=["AAAA-BBBB-CCCC"];
-	/* or multiples:
-	[
-		"AAAA-BBBB-CCCC",
-		"AAAA-BBBB-CCCC",
-		"AAAA-BBBB-CCCC",
-		"AAAA-BBBB-CCCC",
-		"AAAA-BBBB-CCCC"
-	]
-	*/
-
-	console.log("fun starts");
-
-	var execAHK = function(key){
-		var executeFile = config['ahk-exe'];
-		var executeArgs = [config['ahk-script'], key];
-
-		exec(executeFile, executeArgs, function(err, data) {
-			if(err)
-				console.log("executeArgs, err, data:", executeArgs, err, data);
-		});
-	}
-
-
-	keys.forEach(function(e){
-		execAHK(e);
+	exec(executeFile, executeArgs, function(err, data) {
+		if(err)
+			debug("executeArgs, err, data:", executeArgs, err, data);
 	});
+};
 
-})();
+Grabber.prototype.run = function() {
+	var that = this;
+	this.keys.forEach(function(key){
+		that.execAHK(key);
+	});
+	this.loop();	
+	setInterval((function(self){
+		return function(){
+			self.loop();
+		}
+	})(this), this.config['repeat']);
+};
+
+Grabber.prototype.loop = function(){
+	var that = this;
+	request('http://pr0gramm.com/api/items/get?'+(that.config['global-args']), function (error, response, body) {
+		if (error || response.statusCode != 200) {
+			debug(error);
+			return;
+		}
+
+		var pictureIds= [];
+		var tested = 0;
+
+		var list=JSON.parse(body);
+		debug("got "+list.items.length+" OPs ("+that.config['global-args']+")");
+		list.items.forEach(function(listitem){
+			pictureIds.push(listitem.id);
+		});
+
+		//only get first... items
+		var first = 10000;
+		pictureIds.forEach(function(pictureId){
+			if(first<1){
+				return;
+			}
+			first--;
+
+			request(('http://pr0gramm.com/api/items/info?itemId='+pictureId), function (error, response, body) {
+				tested++;
+				if (error || response.statusCode != 200) {
+					debug(error);
+					return;
+				}
+
+				//console.log(body) // Print the body of response.
+				var picturedata=JSON.parse(body);
+				//debug("picturedata", picturedata);
+				picturedata.comments.forEach(function(comment){
+					//debug("got comment", comment.content);
+					//debugl(".");
+					if(checkedComments.indexOf(comment.id)<0){
+						checkedComments.push(comment.id);
+						debug("new (comID, PicID):", comment.id, pictureId, comment.content);
+						var foundKeys = comment.content.match(/\s[\w\d]{5}\-[\w\d]{5}\-[\w\d]{5}(?=\s)/);
+						if(foundKeys != null){
+							foundKeys.forEach(function(key){
+								that.keys.push(key);
+								debug(key);
+								that.execAHK(key);
+							});
+						}
+					}
+				});
+			})
+		});
+	})
+};
+
+new Grabber();
+
